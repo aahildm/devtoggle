@@ -11,5 +11,5 @@ interface IUserService {
     /** Reads back the current value using the same privileged process. */
     boolean getDevelopmentSettingsEnabled();
 
-    void destroy() = 16777114; // Shizuku's special destroy transaction code
+    void destroy();
 }
