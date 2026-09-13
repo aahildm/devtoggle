@@ -1,12 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Requested normally; actually GRANTED to us at runtime via Shizuku,
-         which itself runs as the shell/adb user that already holds it. -->
-    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
-        tools:ignore="ProtectedPermissions"
-        xmlns:tools="http://schemas.android.com/tools" />
-
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"

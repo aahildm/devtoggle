@@ -1,9 +1,11 @@
 package com.example.devtoggle
 
 import android.annotation.SuppressLint
+import android.content.ComponentName
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.provider.Settings
+import android.os.IBinder
 import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -11,9 +13,13 @@ import com.google.android.material.switchmaterial.SwitchMaterial
 import rikka.shizuku.Shizuku
 
 /**
- * Simple toggle for Settings.Global.DEVELOPMENT_SETTINGS_ENABLED,
- * performed via Shizuku (which runs as the shell/adb UID and already
- * holds WRITE_SECURE_SETTINGS). No root required.
+ * Toggles Settings.Global.DEVELOPMENT_SETTINGS_ENABLED using a Shizuku
+ * UserService — a separate process Shizuku spawns running as the shell
+ * (adb) UID, which actually holds WRITE_SECURE_SETTINGS. Calling
+ * Settings.Global directly from this Activity's own process does NOT work,
+ * even with Shizuku's permission granted — Shizuku permission only lets us
+ * bind that privileged process, it doesn't hand our own process the
+ * permission.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -23,12 +29,34 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnRequest: Button
 
     private val permissionCode = 1001
+    private var userService: IUserService? = null
+
+    private val userServiceArgs = Shizuku.UserServiceArgs(
+        ComponentName("com.example.devtoggle", UserService::class.java.name)
+    )
+        .daemon(false)
+        .processNameSuffix("privileged")
+        .debuggable(false)
+        .version(1)
+
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+            userService = IUserService.Stub.asInterface(binder)
+            log("UserService connected.")
+            refreshUiState()
+        }
+
+        override fun onServiceDisconnected(name: ComponentName) {
+            userService = null
+            log("UserService disconnected.")
+        }
+    }
 
     private val permissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
         if (requestCode == permissionCode) {
             if (grantResult == PackageManager.PERMISSION_GRANTED) {
                 log("Shizuku permission granted.")
-                refreshUiState()
+                bindUserService()
             } else {
                 log("Shizuku permission denied.")
             }
@@ -44,6 +72,7 @@ class MainActivity : AppCompatActivity() {
         log("Shizuku binder died — is the Shizuku app/service running?")
         tvStatus.text = "Shizuku: not running"
         switchDev.isEnabled = false
+        userService = null
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -75,6 +104,10 @@ class MainActivity : AppCompatActivity() {
         Shizuku.removeBinderReceivedListener(binderListener)
         Shizuku.removeBinderDeadListener(binderDeadListener)
         Shizuku.removeRequestPermissionResultListener(permissionListener)
+        try {
+            Shizuku.unbindUserService(userServiceArgs, serviceConnection, true)
+        } catch (e: Exception) {
+        }
     }
 
     private fun requestShizukuPermission() {
@@ -88,7 +121,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
             log("Already granted.")
-            refreshUiState()
+            bindUserService()
             return
         }
         if (Shizuku.shouldShowRequestPermissionRationale()) {
@@ -96,6 +129,14 @@ class MainActivity : AppCompatActivity() {
             return
         }
         Shizuku.requestPermission(permissionCode)
+    }
+
+    private fun bindUserService() {
+        try {
+            Shizuku.bindUserService(userServiceArgs, serviceConnection)
+        } catch (e: Exception) {
+            log("Failed to bind UserService: ${e.message}")
+        }
     }
 
     @SuppressLint("SetTextI18n")
@@ -108,18 +149,27 @@ class MainActivity : AppCompatActivity() {
         }
 
         val granted = Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
-        tvStatus.text = if (granted) "Shizuku: connected & permitted" else "Shizuku: running, permission needed"
-        switchDev.isEnabled = granted
+        if (granted && userService == null) {
+            bindUserService()
+        }
 
-        if (granted) {
+        val ready = granted && userService != null
+        tvStatus.text = when {
+            !granted -> "Shizuku: running, permission needed"
+            !ready -> "Shizuku: permitted, connecting service..."
+            else -> "Shizuku: connected & permitted"
+        }
+        switchDev.isEnabled = ready
+
+        if (ready) {
             val current = try {
-                Settings.Global.getInt(contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0)
+                userService?.developmentSettingsEnabled ?: false
             } catch (e: Exception) {
                 log("Failed to read setting: ${e.message}")
-                0
+                false
             }
             switchDev.setOnCheckedChangeListener(null)
-            switchDev.isChecked = current == 1
+            switchDev.isChecked = current
             switchDev.setOnCheckedChangeListener { buttonView, isChecked ->
                 if (buttonView.isPressed) setDevelopmentSettingsEnabled(isChecked)
             }
@@ -128,20 +178,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun setDevelopmentSettingsEnabled(enabled: Boolean) {
         try {
-            // This call requires WRITE_SECURE_SETTINGS. Shizuku having granted us
-            // that permission (it's held by the shell/adb identity) is what makes
-            // this call succeed instead of throwing SecurityException.
-            Settings.Global.putInt(
-                contentResolver,
-                Settings.Global.DEVELOPMENT_SETTINGS_ENABLED,
-                if (enabled) 1 else 0
-            )
+            val service = userService
+            if (service == null) {
+                log("UserService not connected yet.")
+                return
+            }
+            service.setDevelopmentSettingsEnabled(enabled)
             log("Set development_settings_enabled = ${if (enabled) 1 else 0}")
-        } catch (e: SecurityException) {
-            log("SecurityException: ${e.message}. Permission not actually held.")
-            refreshUiState()
         } catch (e: Exception) {
             log("Error: ${e.message}")
+            refreshUiState()
         }
     }
 
