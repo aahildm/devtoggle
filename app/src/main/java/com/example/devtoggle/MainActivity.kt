@@ -185,6 +185,7 @@ class MainActivity : AppCompatActivity() {
             }
             service.setDevelopmentSettingsEnabled(enabled)
             log("Set development_settings_enabled = ${if (enabled) 1 else 0}")
+            DevToggleWidgetProvider.updateAllWidgets(this)
         } catch (e: Exception) {
             log("Error: ${e.message}")
             refreshUiState()
