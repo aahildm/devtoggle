@@ -4,6 +4,7 @@
 /.idea
 .DS_Store
 /build
+!app/debug.keystore
 /captures
 .externalNativeBuild
 .cxx
